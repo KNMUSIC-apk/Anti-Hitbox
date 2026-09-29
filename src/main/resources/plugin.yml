@@ -1,0 +1,15 @@
+name: AntiHitbox
+version: 1.0.0
+main: com.example.antihitbox.AntiHitboxPlugin
+api-version: '1.21'
+author: Senior Dev
+description: Chan sat thuong tu Hitbox Expand / Reach. Khong kick, khong ban, khong warn.
+commands:
+  antihitbox:
+    description: Reload cau hinh AntiHitbox.
+    permission: antihitbox.admin
+    usage: /antihitbox reload
+permissions:
+  antihitbox.admin:
+    description: Cho phep reload plugin.
+    default: op
