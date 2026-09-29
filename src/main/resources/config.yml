@@ -1,0 +1,32 @@
+# =========================================================
+# AntiHitbox — cau hinh
+# =========================================================
+
+reach:
+  # Reach vanilla (block) - chi dung khi use-attribute = false
+  # hoac khi attribute khong resolve duoc.
+  survival: 3.0
+  creative: 6.0
+  # Doc attribute GENERIC_ENTITY_INTERACTION_RANGE cua attacker
+  # lam base range thuc te. Khuyen nghi: true.
+  use-attribute: true
+
+tolerance:
+  # Sai so co ban (block) - bu cho viec server/client lech vi tri nhe.
+  base: 0.10
+  # Cong them moi ms ping cua attacker (block/ms).
+  per-ping-ms: 0.0015
+  # Cap ping toi da (ms) - tranh noi tolerance qua rong.
+  max-ping: 300
+  # Margin expand cho ray trace khi victim dang lag/di chuyen nhanh.
+  victim-margin: 0.05
+
+history:
+  # Bat/tat luu lich su BoundingBox cua victim de bu ping cho ray trace.
+  enabled: true
+  # So tick luu tru (20 tick = 1 giay). 40 = 2 giay.
+  size: 40
+
+debug:
+  # Ghi log ra console khi cancel don danh (khong gui cho player).
+  log-cancelled: false
