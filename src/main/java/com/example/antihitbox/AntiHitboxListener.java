@@ -20,27 +20,25 @@ import org.bukkit.util.BoundingBox;
 import org.bukkit.util.Vector;
 
 /**
- * Anti Hitbox Expand / Reach — Paper 1.21.11.
+ * Anti Hitbox Expand / Reach / Wall-clip — Paper 1.21.11.
  *
  * Nguyen tac:
  *   - KHONG kick, KHONG ban, KHONG gui tin nhan canh bao.
- *   - CHI huy su kien (event.setCancelled(true)) khi phat hien bat thuong.
+ *   - CHI huy su kien khi phat hien bat thuong.
  *
- * Co che:
- *   1. Reach check: khoang cach ngan nhat tu MAT attacker den RIA
- *      BoundingBox THUC cua victim (khong phai center-to-center),
- *      so voi nguong dong (attribute + ping tolerance).
- *   2. Ray trace check: tia nhin tu MAT attacker phai cat BoundingBox
- *      THUC cua victim (hoac box lich su neu ping cao), trong pham vi
- *      reach hop le.
+ * 4 lop check:
+ *   (1) Reach:    khoang cach ngan nhat tu MAT attacker den RIA box that victim.
+ *   (2) Ray trace: tia nhin phai cat BoundingBox THAT cua victim.
+ *   (3) Occlusion: khong co block ran chan giua mat va victim.
+ *   (4) Ping compensation: neu victim ping cao, thu box lich su.
  */
 public final class AntiHitboxListener implements Listener {
 
     // ============================================================
-    // STATIC — resolve attribute mot lan duy nhat (tranh lookup moi event)
+    // STATIC — resolve attribute mot lan duy nhat
     // ============================================================
     private static final Attribute ENTITY_INTERACTION_RANGE = resolveInteractionRangeAttribute();
-    private static final Attribute ATTACK_RANGE            = resolveAttackRangeAttribute();
+    private static final Attribute ATTACK_RANGE              = resolveAttackRangeAttribute();
 
     private static Attribute resolveInteractionRangeAttribute() {
         final String[] keys = {
@@ -61,7 +59,6 @@ public final class AntiHitboxListener implements Listener {
     }
 
     private static Attribute resolveAttackRangeAttribute() {
-        // ATTACK_RANGE chi co tu 1.21.x; wrap try/catch de an toan.
         try {
             return Attribute.valueOf("ATTACK_RANGE");
         } catch (final Throwable ignored) {
@@ -112,7 +109,7 @@ public final class AntiHitboxListener implements Listener {
         // --- BoundingBox THUC cua victim (gom vehicle + dragon parts) ---
         final BoundingBox currentBox = resolveEffectiveBox(victim);
 
-        // --- Tinh nguong reach dong ---
+        // --- Nguong reach dong ---
         final double baseRange = resolveBaseRange(attacker, mode);
         final int ping = Math.min(Math.max(0, attacker.getPing()), config.maxPing());
         final double tolerance = config.baseTolerance() + ping * config.perPingMs();
@@ -129,22 +126,45 @@ public final class AntiHitboxListener implements Listener {
         }
 
         // ========================================================
-        // (2) RAY TRACE CHECK — tia nhin phai cat BoundingBox THUC
+        // (2) RAY TRACE CHECK — tia nhin phai cat BoundingBox THAT
         // ========================================================
         final Vector eyeVec = new Vector(eyeX, eyeY, eyeZ);
         boolean hit = rayHitsBox(currentBox, eyeVec, direction, allowedRange);
+        BoundingBox hitBox = currentBox;
 
-        // Neu chua trung va victim ping cao -> thu box lich su (ping compensation).
+        // Ping compensation: neu victim ping cao, thu box lich su
         if (!hit && config.historyEnabled() && ping > 0) {
             final long targetTime = System.currentTimeMillis() - ping;
             final BoundingBox historical = tracker.getClosestBefore(victim.getUniqueId(), targetTime);
-            if (historical != null) {
-                hit = rayHitsBox(historical, eyeVec, direction, allowedRange);
+            if (historical != null && rayHitsBox(historical, eyeVec, direction, allowedRange)) {
+                hit = true;
+                hitBox = historical;
             }
         }
 
         if (!hit) {
             cancel(event, "ray-trace");
+            return;
+        }
+
+        // ========================================================
+        // (3) BLOCK OCCLUSION CHECK — khong the danh xuyen block
+        //     Dung BoundingBox goc cua victim (hoac box lich su
+        //     neu da fallback) de tinh dung khoang cach entityHit.
+        // ========================================================
+        if (config.occlusionEnabled()) {
+            final boolean occluded = BlockOcclusionChecker.isOccluded(
+                    attacker.getWorld(),
+                    eye,
+                    direction,
+                    hitBox,
+                    allowedRange,
+                    config.occlusionIgnorePassable(),
+                    config.occlusionEpsilon()
+            );
+            if (occluded) {
+                cancel(event, "wall");
+            }
         }
     }
 
@@ -169,8 +189,8 @@ public final class AntiHitboxListener implements Listener {
     }
 
     /**
-     * Tra ve BoundingBox "hieu dung" cua victim:
-     *   - Gop box cua phuong tien victim dang cuoi (boat, horse, minecart...).
+     * BoundingBox "hieu dung" cua victim:
+     *   - Gop box cua phuong tien victim dang cuoi.
      *   - Gop box cac part cua EnderDragon.
      */
     private static BoundingBox resolveEffectiveBox(final Entity victim) {
@@ -191,10 +211,10 @@ public final class AntiHitboxListener implements Listener {
     }
 
     /**
-     * Tinh base range thuc te cua attacker:
-     *   - Uu tien ATTACK_RANGE (1.21+) neu co.
-     *   - Fallback sang ENTITY_INTERACTION_RANGE (attribute).
-     *   - Fallback cuoi cung: config survival/creative.
+     * Base range thuc te cua attacker:
+     *   - Uu tien ATTACK_RANGE (1.21+).
+     *   - Fallback ENTITY_INTERACTION_RANGE.
+     *   - Fallback config survival/creative.
      */
     private double resolveBaseRange(final Player attacker, final GameMode mode) {
         final double fallback = (mode == GameMode.CREATIVE)
@@ -203,14 +223,11 @@ public final class AntiHitboxListener implements Listener {
 
         if (!config.useAttribute()) return fallback;
 
-        // ATTACK_RANGE (1.21+): base attack reach thuc te
         final Double attackRange = readAttribute(attacker, ATTACK_RANGE);
         if (attackRange != null && attackRange > 0) {
             return Math.max(attackRange, fallback);
         }
 
-        // ENTITY_INTERACTION_RANGE: tuy la interact range nhung gan dung voi attack range
-        // trong vanilla 1.20.5+ (ca hai deu default 3.0 survival / 6.0 creative).
         final Double interaction = readAttribute(attacker, ENTITY_INTERACTION_RANGE);
         if (interaction != null && interaction > 0) {
             return Math.max(interaction, fallback);
@@ -251,10 +268,6 @@ public final class AntiHitboxListener implements Listener {
     // TOAN HOC — khong sqrt, khong object rac
     // ============================================================
 
-    /**
-     * Binh phuong khoang cach ngan nhat tu diem (px, py, pz) den RIA cua box.
-     * Tra ve 0 neu diem nam trong box.
-     */
     private static double squaredDistanceToBox(final double px, final double py, final double pz,
                                                final BoundingBox box) {
         final double dx = axisDistanceSq(px, box.getMinX(), box.getMaxX());
@@ -263,15 +276,11 @@ public final class AntiHitboxListener implements Listener {
         return dx + dy + dz;
     }
 
-    /**
-     * Binh phuong khoang cach tren 1 truc tu point den doan [min, max].
-     * Dung Math.max(0, ...) tranh if-branch -> JIT inline tot hon.
-     */
     private static double axisDistanceSq(final double point,
                                          final double min,
                                          final double max) {
-        final double below = min - point; // > 0 neu point < min
-        final double above = point - max; // > 0 neu point > max
+        final double below = min - point;
+        final double above = point - max;
         final double d = Math.max(0.0, Math.max(below, above));
         return d * d;
     }
