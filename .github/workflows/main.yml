@@ -1,0 +1,92 @@
+name: Build AntiHitbox
+
+on:
+  push:
+    branches: [ "main", "master", "develop" ]
+    tags:     [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on Java ${{ matrix.java }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [ '21' ]
+
+    steps:
+      # ------------------------------------------------------------------
+      # 1. Checkout
+      # ------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # 2. Setup JDK 21
+      # ------------------------------------------------------------------
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.java }}
+          cache: 'maven'
+
+      # ------------------------------------------------------------------
+      # 3. Cache PaperMC repo (tranh tai lai moi lan build)
+      # ------------------------------------------------------------------
+      - name: Cache PaperMC dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/io/papermc
+          key: papermc-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            papermc-${{ runner.os }}-
+
+      # ------------------------------------------------------------------
+      # 4. In thong tin moi truong
+      # ------------------------------------------------------------------
+      - name: Print environment info
+        run: |
+          echo "Java version:"
+          java -version
+          echo ""
+          echo "Maven version:"
+          mvn -version
+
+      # ------------------------------------------------------------------
+      # 5. Build voi Maven
+      # ------------------------------------------------------------------
+      - name: Build with Maven
+        run: mvn -B clean package --file pom.xml
+
+      # ------------------------------------------------------------------
+      # 6. Upload JAR artifact
+      # ------------------------------------------------------------------
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AntiHitbox-Java${{ matrix.java }}
+          path: target/*.jar
+          if-no-files-found: error
+          retention-days: 30
+
+      # ------------------------------------------------------------------
+      # 7. Neu la tag (v*) -> tao GitHub Release + attach JAR
+      # ------------------------------------------------------------------
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AntiHitbox ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: target/*.jar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
